@@ -1,0 +1,200 @@
+defaults: &defaults
+  docker:
+    # CircleCI Go images available at: https://hub.docker.com/r/circleci/golang/
+    - image: circleci/golang:1.13.1
+
+  working_directory: /go/src/github.com/dikaeinstein/gomicroservice-search
+
+  environment:
+    TEST_RESULTS: /tmp/test-results
+
+version: 2
+jobs:
+  build:
+    <<: *defaults
+
+    steps:
+      - checkout
+
+      - run:
+          name: Install dependencies
+          command: |
+            go get github.com/Masterminds/glide
+            glide up
+
+      - run:
+          name: Build application for linux
+          command: make build_linux
+
+      - persist_to_workspace:
+          root: /tmp/workspace
+          paths:
+            - search
+
+
+  unit_test:
+    <<: *defaults
+
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+
+      - run: mkdir -p $TEST_RESULTS
+
+      - run:
+          name: Install dependencies
+          command:  go get github.com/jstemmer/go-junit-report
+
+      - run:
+          name: Run unit tests
+          command: |
+            trap "go-junit-report <${TEST_RESULTS}/go-test.out > ${TEST_RESULTS}/go-test-report.xml" EXIT
+            make unit | tee ${TEST_RESULTS}/go-test.out
+      - store_test_results:
+          path: /tmp/test-results
+
+  benchmark:
+    <<: *defaults
+
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+
+      - restore_cache:
+          keys:
+            - benchmarks_{{ .Branch }}
+
+      - run:
+          name: Install dependencies
+          command: |
+            mkdir -p ~/.ssh
+            touch ~/.ssh/known_hosts
+            ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+            git clone -b nic/tollerance_flag git@github.com:nicholasjackson/tools.git /go/src/golang.org/x/tools
+            go install golang.org/x/tools/cmd/benchcmp
+      - run:
+          name: Run benchmark tests
+          command: BRANCH=$CIRCLE_BRANCH make benchmark
+
+      - save_cache:
+          key: benchmarks_{{ .Branch }}_{{ epoch }}
+          paths:
+            - old_bench.txt
+
+  staticcheck:
+    <<: *defaults
+
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+
+      - run:
+          name: Install dependencies
+          command: |
+            go get honnef.co/go/tools/cmd/megacheck
+            go get github.com/stripe/safesql
+      - run:
+          name: Static language checks
+          command: make staticcheck
+
+      - run:
+          name: Safe SQL checks
+          command: make safesql
+
+  sourceclear:
+    <<: *defaults
+
+    steps:
+      - attach_workspace:
+        at: /tmp/workspace
+
+      - run:
+        name: Sourceclear Security Scan
+        command: curl -sSL https://download.sourceclear.com/ci.sh | sh
+
+  integration_test:
+    <<: *defaults
+
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+
+      - run:
+          name: Install dependencies
+          command: go get github.com/DATA-DOG/godog/cmd/godog
+
+      - setup_remote_docker
+
+      - run:
+          name: Run integration tests
+          command: make circleintegration
+
+  deploy:
+    <<: *defaults
+
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+
+      - setup_remote_docker
+
+      - run:
+          name: Install dependencies
+          command: |
+            curl -Ls -o /tmp/terraform.zip https://releases.hashicorp.com/terraform/0.12.12/terraform_0.12.12_linux_amd64.zip
+            sudo unzip /tmp/terraform.zip -d /usr/local/bin
+      - run:
+          name: Build and push Docker image
+          command: |
+            make build_docker
+            docker login -u $DOCKER_USER -p $DOCKER_PASS
+            docker push dikaeinstein/gomicroservice-search:latest
+      - run:
+          name: Initialize Terraform
+          command: |
+            cd terraform
+            terraform init
+      - run:
+          name: Terraform Plan
+          command: |
+            cd terraform
+            terraform plan -out=search.terraform
+      - deploy:
+          name: Deploy to elastic beanstalk with Terraform
+          command: |
+            cd terraform
+            terraform apply main.tf
+      - run:
+          name: Smoke test
+          command: |
+            cd terraform
+            curl $(terraform output search_alb)/health
+workflows:
+  version: 2
+  build_test_and_deploy:
+    jobs:
+      - build
+      - unit_test:
+          requires:
+            - build
+      - benchmark:
+          requires:
+            - build
+      - staticcheck:
+          requires:
+            - build
+      - sourceclear:
+          requires:
+            - staticcheck
+      - integration_test:
+          requires:
+            - build
+            - unit_test
+            - benchmark
+            - staticcheck
+      - deploy:
+          requires:
+            - integration_test
+          filters:
+            branches:
+              only: master

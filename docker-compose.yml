@@ -1,0 +1,24 @@
+version: '3.1'
+services:
+  mysql:
+    image: mysql
+    ports:
+      - 3307:3306
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: kittens
+  nats:
+    image: nats
+    ports:
+     - "4222:4222"
+     - "8222:8222"
+  auth:
+    image: dikaeinstein/gomicroservice-auth
+    ports:
+      - 8081:8081
+    environment:
+      - DOGSTATSD=localhost:8125
+      - RSA_PRIVATE_KEY=$RSA_PRIVATE_KEY
+      - RSA_PUBLIC_KEY=$RSA_PUBLIC_KEY
+      - DD_SITE=datadoghq.eu
+      - DD_API_KEY=$DATADOG_API_KEY

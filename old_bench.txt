@@ -1,0 +1,8 @@
+time="2019-11-01T04:14:50+01:00" level=error msg="<nil>" handler=search service=search
+time="2019-11-01T04:14:50+01:00" level=error msg="<nil>" handler=search service=search
+goos: darwin
+goarch: amd64
+pkg: github.com/dikaeinstein/gomicroservice-search/handler
+BenchmarkSearchHandler-4   	  947132	     30154 ns/op	   11638 B/op	      90 allocs/op
+PASS
+ok  	github.com/dikaeinstein/gomicroservice-search/handler	28.933s
